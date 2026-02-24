@@ -33,10 +33,10 @@ def init_model():
     model.fit(X_train_scaled, y_train_val)
     
     acc = accuracy_score(y_test, model.predict(X_test_scaled))
-    return model, scaler, acc
+    return model, X_test, y_test, acc, scaler
 
 # Kör init-rutinen
-model, scaler, accuracy = init_model()
+model, X_test, y_test, accuracy, scaler = init_model()
 
 # ==========================================
 # 2. BILDHANTERING & PREDIKTION
@@ -85,6 +85,27 @@ col1, col2, col3 = st.columns([2, 1, 1.5])
 
 with col1:
     stroke_width = st.sidebar.slider("Pen storlek: ", 1, 25, 15)
+    # --- NYTT: Väljare för att utforska MNIST ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Siffror från MNIST-databasen")
+    digit_to_show = st.sidebar.selectbox("Välj en siffra att granska:", range(10))
+    
+    if st.sidebar.button(f"Visa exempel på {digit_to_show}"):
+        # Hitta alla index för den valda siffran
+        digit_indices = np.where(y_test.astype(str) == str(digit_to_show))[0]
+        
+        # Slumpa fram 5 index för att göra det lite roligare varje gång man klickar
+        sample_indices = np.random.choice(digit_indices, 5, replace=False)
+        
+        st.sidebar.write(f"Exempel på {digit_to_show}:or:")
+        
+        # Visa bilderna i sidomenyn (i ett litet galleri)
+        side_cols = st.sidebar.columns(5)
+        for i, idx in enumerate(sample_indices):
+            # Kom ihåg: X_test är en numpy-array, så ingen .iloc här
+            img = X_test[idx].reshape(28, 28)
+            side_cols[i].image(img, use_container_width=True)
+    # --------------------------------------------
     st.markdown("### Rita en siffra (0-9)")
     canvas_result = st_canvas(
         fill_color="rgba(255, 165, 0, 0.3)",
@@ -113,11 +134,31 @@ if canvas_result.image_data is not None and np.any(canvas_result.image_data[:, :
             best_guess = max(predictions, key=predictions.get)
             confidence = predictions[best_guess]
             
-            # Här hamnar streamlit run metriken längst till höger
             st.metric("Gissning", f"Siffra {best_guess}", f"{confidence:.1%}")
-            
-            # Och diagrammet direkt under
             st.bar_chart(predictions)
+
+    # --- NY SEKTION: GALLERI UNDER KOLUMNERNA ---
+    # --- GALLERI-KODEN ---
+    st.markdown("---")
+    st.subheader(f"Så här ser 10 st '{best_guess}:or' ut i MNIST-databasen")
+
+    # Eftersom y_test är en numpy-array (tack vare as_frame=False)
+    # använder vi .astype(str) för att säkerställa att jämförelsen med best_guess funkar
+    all_indices = np.where(y_test.astype(str) == str(best_guess))[0]
+    indices = all_indices[:10]
+
+    if len(indices) > 0:
+        img_cols = st.columns(5)
+        for i, idx in enumerate(indices):
+            with img_cols[i % 5]:
+                # Här tar vi bort .iloc eftersom X_test är en numpy-array
+                # Vi plockar raden idx och formar om till 28x28
+                sample_img = X_test[idx].reshape(28, 28)
+                
+                st.image(sample_img, width=60)
+    else:
+        st.warning(f"Kunde inte hitta några referensbilder för siffra {best_guess}.")
+
 else:
     with col3:
         st.info("Väntar på bilden...")
