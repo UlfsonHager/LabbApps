@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from PIL import Image, ImageOps, ImageEnhance
 from streamlit_drawable_canvas import st_canvas
-
+from scipy.ndimage import center_of_mass, shift
 
 # INIT-RUTIN (Körs bara en gång)
 
@@ -49,44 +49,72 @@ model, X_raw, y_raw, accuracy, scaler = init_model()
 
 
 def predict_digit(img_array):
-    
     if isinstance(img_array, np.ndarray) and len(img_array.shape) == 3:
-        # Konvertera till gråskala (ta bara första kanalen eller medelvärde)
+        # 1. Gråskala och inversion
         img_gray = np.mean(img_array[:, :, :3], axis=2).astype(np.uint8)
-        # Invertera färger om det behövs (från vit bakgrund till svart som i MNIST)
         img_gray = 255 - img_gray 
-        
-        # Konvertera Numpy-array till ett PIL Image-objekt för att kunna använda .resize()
         img_pil = Image.fromarray(img_gray)
-            
-        # Öka kontrasten kraftigt (gör gråa pixlar antingen svarta eller vita)
-        # Verkar hjälpa något
-        enhancer = ImageEnhance.Contrast(img_pil)
-        img_pil = enhancer.enhance(2.0)
+        # Nu som gråskala och inverterad (svart bakgrund, vit penna teckning)
+        #img_pil.save("C:\\Users\\ulfha\\OneDrive\\Bilder\\AI\\step1.png")
+        
+        # AUTOMATISK BESKÄRNING  fantastiskt
+        bbox = img_pil.getbbox()# superfunktion, hämtar den rect som det är ritat i, dvs det som inte är vitt (0,0,280,280) är hela
+        if bbox:
+            img_pil = img_pil.crop(bbox) # Lägg den bilden här
+
+        # Skala till 20x20 som det stod om i .DESC
+        w, h = img_pil.size
+        ratio = 20.0 / max(w, h) # Skala så att den längsta sidan blir 20 pixlar
+        new_size = (int(w * ratio), int(h * ratio))
+        img_20 = img_pil.resize(new_size, Image.Resampling.LANCZOS)
+        #img_20.save("C:\\Users\\ulfha\\OneDrive\\Bilder\\AI\\step2.png")        
+        
+        
+        # skapa en 28x28 canvas och klistra in initialt i mitten
+        canvas = Image.new('L', (28, 28), 0)
+        w20, h20 = img_20.size # Ger 20, 20 eller mindre beroende på proportioner
+        canvas.paste(img_20, ((28 - w20) // 2, (28 - h20) // 2)) # Lägg in den i mitten så att den är centrerad i det lilla 28x28-området
+        #canvas.save("C:\\Users\\ulfha\\OneDrive\\Bilder\\AI\\step3.png")
+
+
+        # MASSCENTRUM-JUSTERING För att siffran ska sitta mitt i bilden
+        img_np = np.array(canvas).astype(np.float32)
+        cy, cx = center_of_mass(img_np) # Vart i bilden är tyngdpuntens mitt av det som är ritat, fantastiskt igen
+        
+        # Flytta bilden så att tyngdpunkten hamnar exakt i mitten (13.5, 13.5, ibliden 0-27 dvs 28 pixlar)
+        if not np.isnan(cy) and not np.isnan(cx):
+            shift_y = 13.5 - cy
+            shift_x = 13.5 - cx
+            img_np = shift(img_np, [shift_y, shift_x]) # Vart skall bilden flyttad så att den är i mitten
+        # shiften kan stöka till pixelvärdena så att dom hamnar utanför 0-255, img_np är en float array
+        
+        # Image.fromarray(img_np.astype(np.uint8)).save("C:\\Users\\ulfha\\OneDrive\\Bilder\\AI\\step4.png")
+       
+        # Säkerställ att pixelvärdena håller sig inom 0-255 efter shift
+        img_final_np = np.clip(img_np, 0, 255).astype(np.uint8)
+        
+        # Image.fromarray(img_final_np).save("C:\\Users\\ulfha\\OneDrive\\Bilder\\AI\\step5.png")
+        
+        # Inför prediktion (Platta ut till 784 kolumner)
+        final_input = img_final_np.reshape(1, 784)
+        
+        # Använd Scalern 
+        final_input_scaled = scaler.transform(final_input)
+        
+        # Hämta sannolikheter
+        probs = model.predict_proba(final_input_scaled)[0]
+        
+        # Skapa dict med resultat
+        
+        label_output = {}
+        for i in range(10):
+            current_Ynum = str(i)
+            propability = float(probs[i])
+            label_output[current_Ynum] = propability
     
-        # 4. Skala ner till 28x28
-        img_28 = img_pil.resize((28, 28), Image.Resampling.LANCZOS)
-        
-        # Binarisering: Allt över 128 blir 255 (vitt), allt under blir 0 (svart)
-        # Detta gör att "luddiga" kanter försvinner och linjen ser tjockare ut
-        # Verkar inte hjälpa direkt
-        img_28 = img_28.point(lambda x: 0 if x < 128 else 255)
-        
-        # img_28.save("C:\\Users\\ulfha\\OneDrive\\Bilder\\AI\\last.png") # Spara för debug 
-        img_final = np.array(img_28)# Konvertera till numpy-array
-   
-                
-    # Förbered för prediktion
-    final_input = np.array(img_final).reshape(1, 784)# På en kolumn, 784 rader
-    # Använd Scalern
-    final_input_scaled = scaler.transform(final_input)
-    # Hämta flera sannolikheter 
-    probs = model.predict_proba(final_input_scaled)[0]
-    # Skapa en dict med sannolikheter för varje siffra
-    label_output = {str(i): float(probs[i]) for i in range(10)}
+        return img_final_np, label_output
 
-    return img_final, label_output
-
+    return None, {}
    
 
 # GRÄNSSNITT
@@ -142,6 +170,7 @@ with col1:
 processed_img = None
 predictions = None
 if canvas_result.image_data is not None and np.any(canvas_result.image_data[:, :, :3] < 255):
+    # image_data är en numpy-array med RGBA-data (280x280x4) som kommer från canvasen
     processed_img, predictions = predict_digit(canvas_result.image_data)
     
 # Kolla om användaren ritar något
@@ -155,7 +184,7 @@ if canvas_result.image_data is not None and np.any(canvas_result.image_data[:, :
 
     with col3:
         st.markdown("### 3. Analys")
-        if predictions:
+        if predictions: # En dict med 
             best_guess = max(predictions, key=predictions.get)
             confidence = predictions[best_guess]
             st.metric("Gissning", f"Siffra {best_guess}", f"{confidence:.1%}")
